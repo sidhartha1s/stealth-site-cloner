@@ -3,7 +3,7 @@
 ## Synopsis
 
 ```bash
-python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--settle-ms N] [--screenshots]
+python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--settle-ms N] [--screenshots] [--capture-assets]
 ```
 
 | Argument | Default | Description |
@@ -13,6 +13,7 @@ python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--settle-ms N] [
 | `--limit N` | `0` (all URLs) | Render at most `N` URLs from the sitemap |
 | `--settle-ms N` | `2000` | Milliseconds to wait after `DOMContentLoaded` before saving |
 | `--screenshots` | off | Also save a viewport PNG next to each rendered HTML file |
+| `--capture-assets` | off | Save same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay |
 
 The script never prompts; it runs to completion or exits non-zero on a hard failure.
 
@@ -70,10 +71,19 @@ python stealth_clone.py https://example.com/legal/privacy --out ./out/
 ### JavaScript-heavy or WebGL pages
 
 ```bash
-python stealth_clone.py https://example.com/ --out ./out/ --limit 1 --settle-ms 10000 --screenshots
+python stealth_clone.py https://example.com/ --out ./out/ --limit 1 --settle-ms 30000 --screenshots --capture-assets
 ```
 
 Use a longer settle delay when a SPA, Framer site, Three.js scene, or other animation-heavy page paints late. `--screenshots` captures the rendered viewport as a PNG next to the HTML, which is useful because canvas pixels are not serialized into `page.content()`.
+
+When `--capture-assets` is enabled, replay the result from a local HTTP server:
+
+```bash
+cd ./out/
+python3 -m http.server 8080
+```
+
+Then open `http://127.0.0.1:8080/`. This matters for WebGL apps because workers, WASM, and root-relative `/assets/...` requests are origin-sensitive and do not behave the same under `file://`.
 
 ---
 
@@ -105,8 +115,9 @@ Path components that would escape `--out` (including URL-encoded traversal and W
 
 1. **Sitemap discovery.** Fetches `<BASE_URL>/sitemap.xml`. If the response is a `<sitemapindex>`, follows each child sitemap recursively. If no sitemap is found, falls back to rendering the single base URL. XML is parsed with `defusedxml`.
 2. **One browser, multiple pages.** Spins up a single headless Chromium with `playwright-stealth` patches applied. A pool of 3 worker pages pulls URLs from a shared queue.
-3. **Render.** Each page is loaded with `wait_until="domcontentloaded"`, then the configured JS-settle delay, then `page.content()` is written to disk. CSS, images, fonts, and JS are **not** downloaded — the rendered HTML still references them at their original URLs. A replay shim is injected so root-relative SPA/WebGL asset requests resolve to the original host when the HTML is opened from `file://`.
+3. **Render.** Each page is loaded with `wait_until="domcontentloaded"`, then the configured JS-settle delay, then `page.content()` is written to disk. By default, CSS, images, fonts, and JS are **not** downloaded — the rendered HTML still references them at their original URLs. A replay shim is injected so root-relative SPA/WebGL asset requests resolve to the original host when the HTML is opened from `file://`.
 4. **Mirror.** The URL path is preserved verbatim under `--out`, after path-traversal sanitisation.
+5. **Optional asset capture.** With `--capture-assets`, the browser response stream is saved under `--out`, final HTML references are scanned, JS bundles are scanned for hidden asset strings, and same-origin absolute URLs in saved HTML are rewritten to root-relative paths for local HTTP replay. An `asset-manifest.json` is written at the output root.
 
 ---
 
@@ -131,7 +142,7 @@ await page.wait_for_selector("main", timeout=10000)
 ## Caveats
 
 - **Saved pages still load CSS/JS from the live origin.** They render correctly in any browser when online; they look broken offline. The goal is a faithful render, not an offline mirror.
-- **No asset download.** Images, videos, fonts, JS bundles — none of these are saved locally.
+- **No asset download by default.** Images, videos, fonts, JS bundles — none of these are saved locally unless `--capture-assets` is enabled.
 - **Canvas/WebGL output is not serialized into HTML.** Use `--screenshots` for a visual migration reference when a page's primary UI is a canvas scene.
 - **Robots and rate limits.** This tool does not consult `robots.txt`. Render only what you have the right to render, and don't run high concurrency against hosts you don't own.
 - **Session-gated content.** Pages that require login won't render correctly — Playwright launches a clean browser context every run.

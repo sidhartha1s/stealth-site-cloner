@@ -79,10 +79,19 @@ python stealth_clone.py https://example.com/ --out ./out/
 | `--limit N` | `0` (all) | Cap the number of URLs to render |
 | `--settle-ms N` | `2000` | Wait time after `DOMContentLoaded` before saving |
 | `--screenshots` | off | Also save a viewport PNG next to each HTML file |
+| `--capture-assets` | off | Save same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay |
 
 If the host has no `sitemap.xml`, the script falls back to rendering the single URL you passed.
 
 More examples and internals: [docs/USAGE.md](docs/USAGE.md).
+
+For WebGL/SPA sites, serve captured output over HTTP instead of opening files directly:
+
+```bash
+python stealth_clone.py https://example.com/ --out ./cloned-example/ --limit 1 --settle-ms 30000 --screenshots --capture-assets
+cd cloned-example
+python3 -m http.server 8080
+```
 
 ---
 
