@@ -10,7 +10,7 @@ Use only on URLs you own, operate, or have permission to render.
 
 import asyncio
 import argparse
-from html import escape
+from html import escape, unescape
 import json
 from pathlib import Path
 import re
@@ -34,7 +34,7 @@ HTML_URL_RE = re.compile(r"""(?:src|href)=["']([^"']+)["']|url\(["']?([^"')]+)["
                          re.IGNORECASE)
 JS_ASSET_RE = re.compile(
     r"""["'`]([A-Za-z0-9_./-]+\.(?:drc|ktx2|wasm|json|exr|png|jpe?g|webp|js|"""
-    r"""woff2?|glb|gltf|bin|ogg|mp3|mp4|webm|svg))["'`]""",
+    r"""woff2?|glb|gltf|bin|ogg|mp3|mp4|webm|svg|br|gz|data|symbols|mem))["'`]""",
     re.IGNORECASE,
 )
 IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "ktx2", "exr", "svg")
@@ -297,6 +297,11 @@ class AssetCapture:
         request = response.request
         if request.method != "GET" or response.status != 200:
             return
+        if request.resource_type == "document":
+            return
+        content_type = response.headers.get("content-type", "")
+        if content_type.split(";", 1)[0].strip().lower() == "text/html":
+            return
         if not _same_origin(response.url, self.base_host, self.base_scheme, self.base_port):
             return
 
@@ -319,10 +324,12 @@ class AssetCapture:
             body = await response.body()
         except Exception:
             return
-        self.save_bytes(response.url, rel, out_path, body, response.headers.get("content-type", ""))
+        self.save_bytes(response.url, rel, out_path, body, content_type)
 
     def save_bytes(self, url: str, rel: Path, out_path: Path, body: bytes, content_type: str) -> None:
         if not body:
+            return
+        if out_path.exists() and out_path.is_dir():
             return
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(body)
@@ -337,6 +344,7 @@ class AssetCapture:
         urls: list[str] = []
         for match in HTML_URL_RE.finditer(html):
             raw = match.group(1) or match.group(2) or ""
+            raw = unescape(raw)
             if not raw or raw.startswith(("data:", "blob:", "#")):
                 continue
             absolute = urljoin(page_url, raw)
@@ -412,9 +420,13 @@ class AssetCapture:
             return set()
         if raw.startswith("assets/"):
             return {urljoin(page_url, "/" + raw)}
+        if raw.startswith("Build/"):
+            return {urljoin(page_url, "/" + raw)}
 
         ext = raw.rsplit(".", 1)[-1].lower()
         prefixes: list[str] = ["/assets/"]
+        if ext in ("br", "gz", "data", "symbols", "mem"):
+            prefixes.insert(0, "/Build/")
         if ext in IMAGE_EXTENSIONS:
             prefixes.insert(0, "/assets/images/")
         if ext in AUDIO_EXTENSIONS:
