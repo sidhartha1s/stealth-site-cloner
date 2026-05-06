@@ -32,6 +32,18 @@ HEAD_CLOSE_RE = re.compile(r"</head\s*>", re.IGNORECASE)
 BASE_RE = re.compile(r"<base\b", re.IGNORECASE)
 HTML_URL_RE = re.compile(r"""(?:src|href)=["']([^"']+)["']|url\(["']?([^"')]+)["']?\)""",
                          re.IGNORECASE)
+UNITY_RUNTIME_SCRIPT_RE = re.compile(
+    r"""<script\b[^>]*\bsrc=["'][^"']*/?Build/[^"']+\.(?:loader|framework)\.js(?:\?[^"']*)?["'][^>]*>\s*</script>""",
+    re.IGNORECASE,
+)
+TRACKING_SCRIPT_RE = re.compile(
+    r"""<script\b[^>]*\bsrc=["'][^"']*(?:cloudflareinsights\.com|snap\.licdn\.com|mtm\.[^"']*/matomo\.js)[^"']*["'][^>]*>\s*</script>""",
+    re.IGNORECASE,
+)
+TRACKING_INLINE_SCRIPT_RE = re.compile(
+    r"""<script\b(?![^>]*\btype=["']application/ld\+json["'])[^>]*>.*?(?:_linkedin_partner_id|_paq\.push|matomo\.js|snap\.licdn\.com).*?</script>""",
+    re.IGNORECASE | re.DOTALL,
+)
 JS_ASSET_RE = re.compile(
     r"""["'`]([A-Za-z0-9_./-]+\.(?:drc|ktx2|wasm|json|exr|png|jpe?g|webp|js|"""
     r"""woff2?|glb|gltf|bin|ogg|mp3|mp4|webm|svg|br|gz|data|symbols|mem))["'`]""",
@@ -264,9 +276,22 @@ def rewrite_same_origin_urls(html: str, url: str) -> str:
     return html.replace(origin, "")
 
 
+def strip_runtime_artifacts(html: str) -> str:
+    """Drop script tags injected by runtimes before page.content() snapshots.
+
+    Unity wrappers append build loader/framework scripts at runtime. Persisting
+    those injected tags causes local replay to load the same Unity build twice.
+    Tracking beacons are also removed because local static servers cannot
+    reproduce their collection endpoints and they add noisy replay failures.
+    """
+    html = UNITY_RUNTIME_SCRIPT_RE.sub("", html)
+    html = TRACKING_SCRIPT_RE.sub("", html)
+    return TRACKING_INLINE_SCRIPT_RE.sub("", html)
+
+
 def prepare_html(html: str, url: str, capture_assets: bool) -> str:
     if capture_assets:
-        return rewrite_same_origin_urls(html, url)
+        return rewrite_same_origin_urls(strip_runtime_artifacts(html), url)
     return inject_base_href(html, url)
 
 
@@ -318,12 +343,17 @@ class AssetCapture:
         async with self._lock:
             if response.url in self._seen:
                 return
-            self._seen.add(response.url)
 
         try:
             body = await response.body()
         except Exception:
             return
+        if not body:
+            return
+        async with self._lock:
+            if response.url in self._seen:
+                return
+            self._seen.add(response.url)
         self.save_bytes(response.url, rel, out_path, body, content_type)
 
     def save_bytes(self, url: str, rel: Path, out_path: Path, body: bytes, content_type: str) -> None:
@@ -372,6 +402,9 @@ class AssetCapture:
             try:
                 with requests.get(url, timeout=20, stream=True) as resp:
                     resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "")
+                    if content_type.split(";", 1)[0].strip().lower() == "text/html":
+                        return
                     buf = bytearray()
                     for chunk in resp.iter_content(chunk_size=64 * 1024):
                         if not chunk:
@@ -383,7 +416,7 @@ class AssetCapture:
                     if url in self._seen:
                         return
                     self._seen.add(url)
-                    self.save_bytes(url, rel, out_path, bytes(buf), resp.headers.get("content-type", ""))
+                    self.save_bytes(url, rel, out_path, bytes(buf), content_type)
                     return
             except Exception as e:
                 last_error = e
@@ -425,6 +458,13 @@ class AssetCapture:
 
         ext = raw.rsplit(".", 1)[-1].lower()
         prefixes: list[str] = ["/assets/"]
+        urls: set[str] = set()
+        if raw.endswith((".data.br", ".data.gz", ".data")):
+            for suffix in ("_dxt", "_astc"):
+                variant = re.sub(r"\.data(\.(?:br|gz))?$", suffix + r".data\1", raw)
+                urls.add(urljoin(page_url, "/Build/" + variant))
+                wasm_variant = re.sub(r"\.data(\.(?:br|gz))?$", suffix + r".wasm\1", raw)
+                urls.add(urljoin(page_url, "/Build/" + wasm_variant))
         if ext in ("br", "gz", "data", "symbols", "mem"):
             prefixes.insert(0, "/Build/")
         if ext in IMAGE_EXTENSIONS:
@@ -439,7 +479,8 @@ class AssetCapture:
             prefixes = ["/assets/libs/basis/", "/assets/libs/draco/", "/assets/"]
         if ext in GLTF_EXTENSIONS:
             prefixes.insert(0, "/assets/gltf/")
-        return {urljoin(page_url, prefix + raw) for prefix in prefixes}
+        urls.update(urljoin(page_url, prefix + raw) for prefix in prefixes)
+        return urls
 
     def write_manifest(self) -> None:
         if not self.manifest:
@@ -475,7 +516,10 @@ async def render_page(page, url: str, out_dir: Path, settle_ms: int, screenshots
             await asset_capture.capture_html_references(html, url)
         out_path.write_text(prepare_html(html, url, capture_assets), encoding="utf-8")
         if screenshots:
-            await page.screenshot(path=out_path.with_suffix(".png"))
+            try:
+                await page.screenshot(path=out_path.with_suffix(".png"), timeout=10000)
+            except Exception as e:
+                print(f"  ⚠ Screenshot failed for {url}: {e}")
         print(f"  ✓ {url}")
         return True
     except Exception as e:
@@ -503,7 +547,8 @@ async def worker(queue: asyncio.Queue, browser, out_dir: Path, settle_ms: int, s
 
 
 async def clone(base_url: str, out_dir: Path, limit: int = 0, settle_ms: int = 2000,
-                screenshots: bool = False, capture_assets: bool = False):
+                screenshots: bool = False, capture_assets: bool = False,
+                single_page: bool = False):
     parsed_base = urlparse(base_url)
     if parsed_base.scheme not in ALLOWED_SCHEMES or not parsed_base.hostname:
         raise SystemExit(f"Refusing to render non-http(s) URL: {base_url}")
@@ -517,15 +562,19 @@ async def clone(base_url: str, out_dir: Path, limit: int = 0, settle_ms: int = 2
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sitemap_url = base_url.rstrip("/") + "/sitemap.xml"
-    print(f"Fetching sitemap: {sitemap_url}")
-    urls = fetch_sitemap_urls(sitemap_url, base_host, base_scheme, base_port)
-
-    if not urls:
-        print("No URLs found in sitemap — falling back to the supplied URL.")
+    if single_page:
+        print("Single-page mode — rendering only the supplied URL.")
         urls = [base_url]
     else:
-        print(f"Found {len(urls)} URLs\n")
+        sitemap_url = base_url.rstrip("/") + "/sitemap.xml"
+        print(f"Fetching sitemap: {sitemap_url}")
+        urls = fetch_sitemap_urls(sitemap_url, base_host, base_scheme, base_port)
+
+        if not urls:
+            print("No URLs found in sitemap — falling back to the supplied URL.")
+            urls = [base_url]
+        else:
+            print(f"Found {len(urls)} URLs\n")
 
     if limit > 0:
         urls = urls[:limit]
@@ -574,7 +623,9 @@ if __name__ == "__main__":
                         help="Also save a viewport PNG next to each rendered HTML file")
     parser.add_argument("--capture-assets", action="store_true",
                         help="Save same-origin runtime assets for local HTTP replay")
+    parser.add_argument("--single-page", action="store_true",
+                        help="Skip sitemap discovery and render only the supplied URL")
     args = parser.parse_args()
 
     asyncio.run(clone(args.url, Path(args.out), args.limit, args.settle_ms,
-                      args.screenshots, args.capture_assets))
+                      args.screenshots, args.capture_assets, args.single_page))

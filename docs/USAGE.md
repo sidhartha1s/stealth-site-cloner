@@ -3,7 +3,7 @@
 ## Synopsis
 
 ```bash
-python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--settle-ms N] [--screenshots] [--capture-assets]
+python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--single-page] [--settle-ms N] [--screenshots] [--capture-assets]
 ```
 
 | Argument | Default | Description |
@@ -11,6 +11,7 @@ python stealth_clone.py <BASE_URL> [--out OUT_DIR] [--limit N] [--settle-ms N] [
 | `url` (positional) | required | Base URL to render (e.g. `https://example.com/`) |
 | `--out` | `./stealth-clone` | Output directory (created if missing) |
 | `--limit N` | `0` (all URLs) | Render at most `N` URLs from the sitemap |
+| `--single-page` | off | Skip sitemap discovery and render only the supplied URL |
 | `--settle-ms N` | `2000` | Milliseconds to wait after `DOMContentLoaded` before saving |
 | `--screenshots` | off | Also save a viewport PNG next to each rendered HTML file |
 | `--capture-assets` | off | Save same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay |
@@ -26,10 +27,10 @@ The script never prompts; it runs to completion or exits non-zero on a hard fail
 ### Smoke test (one page only)
 
 ```bash
-python stealth_clone.py https://example.com/ --limit 1 --out ./_test/
+python stealth_clone.py https://example.com/ --single-page --out ./_test/
 ```
 
-Useful for verifying the install — Chromium boots, the stealth patches load, and one HTML file appears at `_test/index.html`.
+Useful for verifying the install — Chromium boots, the stealth patches load, sitemap discovery is skipped, and one HTML file appears at `_test/index.html`.
 
 ### Whole-sitemap render
 
@@ -71,7 +72,7 @@ python stealth_clone.py https://example.com/legal/privacy --out ./out/
 ### JavaScript-heavy or WebGL pages
 
 ```bash
-python stealth_clone.py https://example.com/ --out ./out/ --limit 1 --settle-ms 30000 --screenshots --capture-assets
+python stealth_clone.py https://example.com/ --out ./out/ --single-page --settle-ms 30000 --screenshots --capture-assets
 ```
 
 Use a longer settle delay when a SPA, Framer site, Three.js scene, or other animation-heavy page paints late. `--screenshots` captures the rendered viewport as a PNG next to the HTML, which is useful because canvas pixels are not serialized into `page.content()`.
@@ -113,7 +114,7 @@ Path components that would escape `--out` (including URL-encoded traversal and W
 
 ## How it works
 
-1. **Sitemap discovery.** Fetches `<BASE_URL>/sitemap.xml`. If the response is a `<sitemapindex>`, follows each child sitemap recursively. If no sitemap is found, falls back to rendering the single base URL. XML is parsed with `defusedxml`.
+1. **Sitemap discovery.** Fetches `<BASE_URL>/sitemap.xml`. If the response is a `<sitemapindex>`, follows each child sitemap recursively. If no sitemap is found, falls back to rendering the single base URL. XML is parsed with `defusedxml`. With `--single-page`, this step is skipped and only the supplied URL is rendered.
 2. **One browser, multiple pages.** Spins up a single headless Chromium with `playwright-stealth` patches applied. A pool of 3 worker pages pulls URLs from a shared queue.
 3. **Render.** Each page is loaded with `wait_until="domcontentloaded"`, then the configured JS-settle delay, then `page.content()` is written to disk. By default, CSS, images, fonts, and JS are **not** downloaded — the rendered HTML still references them at their original URLs. A replay shim is injected so root-relative SPA/WebGL asset requests resolve to the original host when the HTML is opened from `file://`.
 4. **Mirror.** The URL path is preserved verbatim under `--out`, after path-traversal sanitisation.
