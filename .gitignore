@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Playwright cache (the bundled Chromium lives outside the repo, but just in case)
+.playwright-cache/
+
+# Output dirs created by example runs
+cloned-*/
+stealth-clone/
+out/
+_test/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
