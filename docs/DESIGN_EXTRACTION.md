@@ -109,3 +109,5 @@ rm -rf ~/.claude/skills/<name>/
 # Windows PowerShell
 Remove-Item -Recurse "$HOME\.claude\skills\<name>"
 ```
+
+The bundled `skills/clone-site/SKILL.md` can also be installed for Codex by copying it to `~/.codex/skills/clone-site/` on Linux/macOS or `%USERPROFILE%\.codex\skills\clone-site\` on Windows.

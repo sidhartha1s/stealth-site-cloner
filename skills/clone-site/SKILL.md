@@ -60,12 +60,14 @@ If skillui can't find its modules on Linux:
 NODE_PATH=$(npm root -g) skillui ...
 ```
 
-Clean up any auto-installed skill afterwards:
+Clean up any auto-installed Claude skill afterwards:
 
 ```bash
 # Linux / macOS
 rm -rf ~/.claude/skills/<slug>/
 ```
+
+For Codex, install this bundled skill by copying `skills/clone-site/` to `~/.codex/skills/clone-site/` on Linux/macOS or `%USERPROFILE%\.codex\skills\clone-site\` on Windows.
 
 ### 3. Report
 

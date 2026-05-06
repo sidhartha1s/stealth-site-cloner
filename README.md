@@ -97,9 +97,19 @@ Details: [docs/DESIGN_EXTRACTION.md](docs/DESIGN_EXTRACTION.md).
 
 ---
 
-## Use with Claude Code
+## Use with Claude Code or Codex
 
-A ready-made [Claude Code skill](skills/clone-site/SKILL.md) lives in `skills/clone-site/`. Copy it to `~/.claude/skills/clone-site/` (Linux/macOS) or `%USERPROFILE%\.claude\skills\clone-site\` (Windows).
+A ready-made [agent skill](skills/clone-site/SKILL.md) lives in `skills/clone-site/`.
+
+For Codex, copy it to:
+
+- Linux/macOS: `~/.codex/skills/clone-site/`
+- Windows: `%USERPROFILE%\.codex\skills\clone-site\`
+
+For Claude Code, copy it to:
+
+- Linux/macOS: `~/.claude/skills/clone-site/`
+- Windows: `%USERPROFILE%\.claude\skills\clone-site\`
 
 ---
 
@@ -121,7 +131,7 @@ stealth-site-cloner/
 │   └── install.ps1               Windows PowerShell installer
 └── skills/
     └── clone-site/
-        └── SKILL.md              drop-in skill for Claude Code
+        └── SKILL.md              drop-in skill for Codex or Claude Code
 ```
 
 ---
