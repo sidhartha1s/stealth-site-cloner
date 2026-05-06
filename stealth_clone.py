@@ -10,7 +10,10 @@ Use only on URLs you own, operate, or have permission to render.
 
 import asyncio
 import argparse
+from html import escape
+import json
 from pathlib import Path
+import re
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -23,6 +26,9 @@ CONCURRENCY = 3  # parallel pages (each gets its own browser page)
 MAX_SITEMAP_BYTES = 25 * 1024 * 1024  # 25 MB cap per sitemap response
 ALLOWED_SCHEMES = ("http", "https")
 WINDOWS_UNSAFE_CHARS = set('<>:"|?*')
+HEAD_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+HEAD_CLOSE_RE = re.compile(r"</head\s*>", re.IGNORECASE)
+BASE_RE = re.compile(r"<base\b", re.IGNORECASE)
 
 
 def _normalized_port(parsed) -> int | None:
@@ -147,7 +153,78 @@ def url_to_path(url: str) -> Path | None:
     return Path(*parts) / "index.html"
 
 
-async def render_page(page, url: str, out_dir: Path):
+def origin_base_href(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}/"
+
+
+def replay_url_patch(url: str) -> str:
+    origin = origin_base_href(url).rstrip("/")
+    origin_json = json.dumps(origin)
+    return f"""<script>
+(() => {{
+  const origin = {origin_json};
+  const absolutize = (url) => {{
+    if (typeof url === "string" && url.startsWith("/")) return origin + url;
+    if (url instanceof URL && url.protocol === "file:" && url.pathname.startsWith("/")) {{
+      return origin + url.pathname + url.search + url.hash;
+    }}
+    return url;
+  }};
+
+  const originalFetch = window.fetch;
+  window.fetch = function(input, init) {{
+    if (typeof input === "string" || input instanceof URL) {{
+      input = absolutize(input);
+    }} else if (input instanceof Request && input.url.startsWith("file:///")) {{
+      const parsed = new URL(input.url);
+      input = new Request(origin + parsed.pathname + parsed.search + parsed.hash, input);
+    }}
+    return originalFetch.call(this, input, init);
+  }};
+
+  const OriginalWorker = window.Worker;
+  window.Worker = function(scriptURL, options) {{
+    const resolved = absolutize(scriptURL);
+    try {{
+      return new OriginalWorker(resolved, options);
+    }} catch (error) {{
+      if (typeof resolved !== "string" || !/^https?:\\/\\//.test(resolved)) throw error;
+      const isModule = options && options.type === "module";
+      const source = isModule
+        ? `import ${{JSON.stringify(resolved)}};`
+        : `importScripts(${{JSON.stringify(resolved)}});`;
+      const blobURL = URL.createObjectURL(new Blob([source], {{ type: "text/javascript" }}));
+      return new OriginalWorker(blobURL, options);
+    }}
+  }};
+  window.Worker.prototype = OriginalWorker.prototype;
+
+  const originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {{
+    return originalOpen.call(this, method, absolutize(url), ...rest);
+  }};
+}})();
+</script>"""
+
+
+def inject_base_href(html: str, url: str) -> str:
+    """Make root-relative SPA asset fetches work when replayed from file://."""
+    head = HEAD_RE.search(html)
+    if not head:
+        return html
+
+    head_close = HEAD_CLOSE_RE.search(html, head.end())
+    head_body = html[head.end():head_close.start()] if head_close else html[head.end():]
+    if BASE_RE.search(head_body):
+        return html
+
+    replay_patch = replay_url_patch(url)
+    base = f'<base href="{escape(origin_base_href(url), quote=True)}">'
+    return html[:head.end()] + base + replay_patch + html[head.end():]
+
+
+async def render_page(page, url: str, out_dir: Path, settle_ms: int, screenshots: bool):
     rel = url_to_path(url)
     if rel is None:
         print(f"  ✗ {url} — unsafe path, skipped")
@@ -164,8 +241,10 @@ async def render_page(page, url: str, out_dir: Path):
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(2000)  # let JS settle
-        out_path.write_text(await page.content(), encoding="utf-8")
+        await page.wait_for_timeout(settle_ms)  # let JS settle
+        out_path.write_text(inject_base_href(await page.content(), url), encoding="utf-8")
+        if screenshots:
+            await page.screenshot(path=out_path.with_suffix(".png"))
         print(f"  ✓ {url}")
         return True
     except Exception as e:
@@ -173,7 +252,7 @@ async def render_page(page, url: str, out_dir: Path):
         return False
 
 
-async def worker(queue: asyncio.Queue, browser, out_dir: Path):
+async def worker(queue: asyncio.Queue, browser, out_dir: Path, settle_ms: int, screenshots: bool):
     """Each worker owns its own page and pulls URLs from the shared queue."""
     page = await browser.new_page()
     results = []
@@ -182,16 +261,19 @@ async def worker(queue: asyncio.Queue, browser, out_dir: Path):
             url = queue.get_nowait()
         except asyncio.QueueEmpty:
             break
-        results.append(await render_page(page, url, out_dir))
+        results.append(await render_page(page, url, out_dir, settle_ms, screenshots))
         queue.task_done()
     await page.close()
     return results
 
 
-async def clone(base_url: str, out_dir: Path, limit: int = 0):
+async def clone(base_url: str, out_dir: Path, limit: int = 0, settle_ms: int = 2000,
+                screenshots: bool = False):
     parsed_base = urlparse(base_url)
     if parsed_base.scheme not in ALLOWED_SCHEMES or not parsed_base.hostname:
         raise SystemExit(f"Refusing to render non-http(s) URL: {base_url}")
+    if settle_ms < 0:
+        raise SystemExit("--settle-ms must be 0 or greater")
     base_port = _normalized_port(parsed_base)
     if base_port is None:
         raise SystemExit(f"Refusing to render URL with invalid port: {base_url}")
@@ -220,7 +302,7 @@ async def clone(base_url: str, out_dir: Path, limit: int = 0):
 
     async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(headless=True)
-        workers = [worker(queue, browser, out_dir) for _ in range(CONCURRENCY)]
+        workers = [worker(queue, browser, out_dir, settle_ms, screenshots) for _ in range(CONCURRENCY)]
         all_results = await asyncio.gather(*workers)
         await browser.close()
 
@@ -233,6 +315,10 @@ if __name__ == "__main__":
     parser.add_argument("url", help="Base URL (e.g. https://example.com/)")
     parser.add_argument("--out", default="./stealth-clone", help="Output directory")
     parser.add_argument("--limit", type=int, default=0, help="Max URLs to render (0 = all)")
+    parser.add_argument("--settle-ms", type=int, default=2000,
+                        help="Milliseconds to wait after DOMContentLoaded before saving")
+    parser.add_argument("--screenshots", action="store_true",
+                        help="Also save a viewport PNG next to each rendered HTML file")
     args = parser.parse_args()
 
-    asyncio.run(clone(args.url, Path(args.out), args.limit))
+    asyncio.run(clone(args.url, Path(args.out), args.limit, args.settle_ms, args.screenshots))
