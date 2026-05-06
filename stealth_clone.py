@@ -11,7 +11,7 @@ Use only on URLs you own, operate, or have permission to render.
 import asyncio
 import argparse
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from defusedxml import ElementTree as ET
@@ -22,6 +22,7 @@ SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 CONCURRENCY = 3  # parallel pages (each gets its own browser page)
 MAX_SITEMAP_BYTES = 25 * 1024 * 1024  # 25 MB cap per sitemap response
 ALLOWED_SCHEMES = ("http", "https")
+WINDOWS_UNSAFE_CHARS = set('<>:"|?*')
 
 
 def _normalized_port(parsed) -> int | None:
@@ -125,16 +126,23 @@ def url_to_path(url: str) -> Path | None:
     Returns None if every path component would be unsafe (``..``/``.``/empty).
     """
     parsed = urlparse(url)
-    raw = parsed.path.strip("/")
+    raw = unquote(parsed.path).replace("\\", "/").strip("/")
     if not raw:
         return Path("index.html")
 
-    parts = [p for p in raw.split("/") if p and p not in ("..", ".")]
+    parts = [
+        p
+        for p in raw.split("/")
+        if p
+        and p not in ("..", ".")
+        and not any(ord(ch) < 32 for ch in p)
+        and not any(ch in WINDOWS_UNSAFE_CHARS for ch in p)
+    ]
     if not parts:
         return None
 
     last = parts[-1]
-    if last.endswith(".html") or last.endswith(".htm"):
+    if last.lower().endswith((".html", ".htm")):
         return Path(*parts)
     return Path(*parts) / "index.html"
 

@@ -138,7 +138,7 @@ stealth-site-cloner/
 
 ## Security & responsible use
 
-- The renderer writes only inside the directory passed via `--out`. Sitemap entries that try to escape this directory (e.g. components containing `..`) are dropped, with a defence-in-depth check before each write.
+- The renderer writes only inside the directory passed via `--out`. Sitemap entries that try to escape this directory (including URL-encoded traversal and Windows path separators) are dropped, with a defence-in-depth check before each write.
 - Sitemap XML is parsed with `defusedxml`, which disables external entities and blocks common XML attacks.
 - The tool does not bypass paywalls, login walls, or DRM. Pages requiring a session will not render.
 - The tool does not consult `robots.txt`. **Respect site owners.** Don't render at high concurrency against hosts you don't own.

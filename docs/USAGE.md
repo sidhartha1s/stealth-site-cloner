@@ -87,7 +87,7 @@ URL-to-path rule:
 | `/foo/page.html` | `foo/page.html` |
 | `/foo/page.htm` | `foo/page.htm` |
 
-Literal path components that would escape `--out` (e.g. `..`) are dropped; the renderer also performs a final `is_relative_to(out_dir)` check before each write.
+Path components that would escape `--out` (including URL-encoded traversal and Windows path separators) are dropped; the renderer also performs a final `is_relative_to(out_dir)` check before each write.
 
 ---
 
