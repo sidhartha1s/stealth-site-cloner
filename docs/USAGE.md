@@ -118,7 +118,7 @@ Path components that would escape `--out` (including URL-encoded traversal and W
 2. **One browser, multiple pages.** Spins up a single headless Chromium with `playwright-stealth` patches applied. A pool of 3 worker pages pulls URLs from a shared queue.
 3. **Render.** Each page is loaded with `wait_until="domcontentloaded"`, then the configured JS-settle delay, then `page.content()` is written to disk. By default, CSS, images, fonts, and JS are **not** downloaded — the rendered HTML still references them at their original URLs. A replay shim is injected so root-relative SPA/WebGL asset requests resolve to the original host when the HTML is opened from `file://`.
 4. **Mirror.** The URL path is preserved verbatim under `--out`, after path-traversal sanitisation.
-5. **Optional asset capture.** With `--capture-assets`, the browser response stream is saved under `--out`, final HTML references are scanned, JS bundles are scanned for hidden asset strings, and same-origin absolute URLs in saved HTML are rewritten to root-relative paths for local HTTP replay. An `asset-manifest.json` is written at the output root.
+5. **Optional asset capture.** With `--capture-assets`, the browser response stream is saved under `--out`, final HTML references are scanned, JS bundles are scanned for hidden asset strings, and same-origin absolute URLs in saved HTML are rewritten to root-relative paths for local HTTP replay. Query-string asset URLs are saved to deterministic unique paths, so framework endpoints such as Next.js image optimizer URLs do not overwrite each other. An `asset-manifest.json` is written at the output root.
 
 ---
 
@@ -147,7 +147,7 @@ await page.wait_for_selector("main", timeout=10000)
 - **Canvas/WebGL output is not serialized into HTML.** Use `--screenshots` for a visual migration reference when a page's primary UI is a canvas scene.
 - **Robots and rate limits.** This tool does not consult `robots.txt`. Render only what you have the right to render, and don't run high concurrency against hosts you don't own.
 - **Session-gated content.** Pages that require login won't render correctly — Playwright launches a clean browser context every run.
-- **Query strings.** The path-mapping ignores query strings; two URLs differing only in `?foo=bar` will overwrite each other.
+- **Runtime-generated query URLs.** With `--capture-assets`, query-string assets found in the browser response stream or final HTML are saved to unique local paths and rewritten in the saved HTML. URLs constructed later entirely inside JavaScript may still need a live origin or a future replay-server shim.
 
 ---
 
