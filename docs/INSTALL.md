@@ -140,15 +140,13 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ## Verify your install (any OS)
 
 ```bash
-python stealth_clone.py https://example.com/ --out ./_test/ --limit 1
+python stealth_clone.py https://example.com/ --out ./_test/ --single-page
 ```
 
 Expected output:
 
 ```
-Fetching sitemap: https://example.com/sitemap.xml
-  ⚠ Could not fetch ...   ← example.com has no sitemap; that's fine
-No URLs found in sitemap — falling back to homepage only.
+Single-page mode — rendering only the supplied URL.
   ✓ https://example.com/
 
 Done — 1/1 pages saved to ./_test/

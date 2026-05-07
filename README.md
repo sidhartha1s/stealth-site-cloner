@@ -2,7 +2,7 @@
 
 A single-file Python script that renders the URLs listed in a `sitemap.xml` using a headless Chromium browser and writes the rendered HTML into a local directory tree.
 
-CSS, JavaScript, and other assets in the saved HTML continue to load from their original origin — pages render correctly in any browser when the user is online.
+CSS, JavaScript, and other assets in the saved HTML continue to load from their original origin. For complex SPA/WebGL pages, use `--settle-ms` and `--screenshots` to capture a visual migration reference.
 
 Cross-platform: **Linux, macOS, and native Windows** (no WSL needed).
 
@@ -77,10 +77,22 @@ python stealth_clone.py https://example.com/ --out ./out/
 | `url` (positional) | required | Base URL to render |
 | `--out` | `./stealth-clone` | Output directory |
 | `--limit N` | `0` (all) | Cap the number of URLs to render |
+| `--single-page` | off | Skip sitemap discovery and render only the supplied URL |
+| `--settle-ms N` | `2000` | Wait time after `DOMContentLoaded` before saving |
+| `--screenshots` | off | Also save a viewport PNG next to each HTML file |
+| `--capture-assets` | off | Save same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay |
 
 If the host has no `sitemap.xml`, the script falls back to rendering the single URL you passed.
 
 More examples and internals: [docs/USAGE.md](docs/USAGE.md).
+
+For WebGL/SPA sites, serve captured output over HTTP instead of opening files directly:
+
+```bash
+python stealth_clone.py https://example.com/ --out ./cloned-example/ --single-page --settle-ms 30000 --screenshots --capture-assets
+cd cloned-example
+python3 -m http.server 8080
+```
 
 ---
 
@@ -140,6 +152,7 @@ stealth-site-cloner/
 
 - The renderer writes only inside the directory passed via `--out`. Sitemap entries that try to escape this directory (including URL-encoded traversal and Windows path separators) are dropped, with a defence-in-depth check before each write.
 - Sitemap XML is parsed with `defusedxml`, which disables external entities and blocks common XML attacks.
+- Saved HTML includes a small replay shim so root-relative SPA and WebGL asset requests still resolve to the original host when opened from `file://`.
 - The tool does not bypass paywalls, login walls, or DRM. Pages requiring a session will not render.
 - The tool does not consult `robots.txt`. **Respect site owners.** Don't render at high concurrency against hosts you don't own.
 
