@@ -96,6 +96,8 @@ python3 -m http.server 8080
 
 To compare a served clone against the live page with Playwright screenshots and
 DOM metrics, see [docs/PLAYWRIGHT_COMPARISON.md](docs/PLAYWRIGHT_COMPARISON.md).
+To audit previously generated `cloned-*` outputs locally, see
+[docs/LOCAL_CLONE_AUDIT.md](docs/LOCAL_CLONE_AUDIT.md).
 
 ---
 
