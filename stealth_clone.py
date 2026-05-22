@@ -10,11 +10,12 @@ Use only on URLs you own, operate, or have permission to render.
 
 import asyncio
 import argparse
+import hashlib
 from html import escape, unescape
 import json
 from pathlib import Path
 import re
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 import requests
 from defusedxml import ElementTree as ET
@@ -49,12 +50,16 @@ JS_ASSET_RE = re.compile(
     r"""woff2?|glb|gltf|bin|ogg|mp3|mp4|webm|svg|br|gz|data|symbols|mem))["'`]""",
     re.IGNORECASE,
 )
-IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "ktx2", "exr", "svg")
+IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "avif", "ktx2", "exr", "svg")
 AUDIO_EXTENSIONS = ("ogg", "mp3")
 GEOMETRY_EXTENSIONS = ("drc",)
 FONT_EXTENSIONS = ("json", "woff", "woff2")
 BASIS_EXTENSIONS = ("wasm", "js")
 GLTF_EXTENSIONS = ("glb", "gltf", "bin")
+ASSET_EXTENSIONS = (
+    IMAGE_EXTENSIONS + AUDIO_EXTENSIONS + GEOMETRY_EXTENSIONS + FONT_EXTENSIONS
+    + BASIS_EXTENSIONS + GLTF_EXTENSIONS + ("css", "mp4", "webm", "br", "gz", "data")
+)
 
 
 def _normalized_port(parsed) -> int | None:
@@ -196,7 +201,42 @@ def url_to_asset_path(url: str) -> Path | None:
     ]
     if not parts:
         return None
+    if parsed.query:
+        parts = query_asset_parts(parts, parsed.query)
     return Path(*parts)
+
+
+def safe_asset_suffix(name: str) -> str:
+    suffix = Path(name).suffix.lower()
+    if not suffix:
+        return ""
+    ext = suffix[1:]
+    if ext in ASSET_EXTENSIONS and ext.isalnum():
+        return suffix
+    return ""
+
+
+def query_asset_suffix(query: str) -> str:
+    for _, value in parse_qsl(query, keep_blank_values=True):
+        candidate = unquote(value).replace("\\", "/")
+        parsed = urlparse(candidate)
+        suffix = safe_asset_suffix(parsed.path or candidate)
+        if suffix:
+            return suffix
+    return ""
+
+
+def query_asset_parts(parts: list[str], query: str) -> list[str]:
+    digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]
+    marker = f"__q_{digest}"
+    last = parts[-1]
+    suffix = safe_asset_suffix(last)
+    if suffix:
+        stem = last[:-len(suffix)]
+        return [*parts[:-1], f"{stem}.{marker}{suffix}"]
+
+    suffix = query_asset_suffix(query)
+    return [*parts, f"{marker}{suffix}"]
 
 
 def origin_base_href(url: str) -> str:
@@ -276,6 +316,21 @@ def rewrite_same_origin_urls(html: str, url: str) -> str:
     return html.replace(origin, "")
 
 
+def replace_html_urls(html: str, callback) -> str:
+    def replacer(match: re.Match) -> str:
+        raw = match.group(1) or match.group(2) or ""
+        replacement = callback(unescape(raw))
+        if replacement is None:
+            return match.group(0)
+        if match.group(1) is not None:
+            quote = match.group(0).split("=", 1)[1][0]
+            attr = match.group(0).split("=", 1)[0]
+            return f"{attr}={quote}{escape(replacement, quote=True)}{quote}"
+        return f"url({replacement})"
+
+    return HTML_URL_RE.sub(replacer, html)
+
+
 def strip_runtime_artifacts(html: str) -> str:
     """Drop script tags injected by runtimes before page.content() snapshots.
 
@@ -305,6 +360,7 @@ class AssetCapture:
         self._tasks: set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
         self.manifest: list[dict[str, str | int]] = []
+        self._url_to_path: dict[str, str] = {}
 
     def attach(self, page) -> None:
         page.on("response", lambda response: self.schedule(response))
@@ -363,6 +419,7 @@ class AssetCapture:
             return
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(body)
+        self._url_to_path[url] = "/" + rel.as_posix()
         self.manifest.append({
             "url": url,
             "path": str(rel),
@@ -439,6 +496,20 @@ class AssetCapture:
             for url in sorted(urls):
                 await asyncio.to_thread(self.capture_url_sync, url, True)
 
+    def prepare_html(self, html: str, page_url: str) -> str:
+        html = strip_runtime_artifacts(html)
+
+        def rewrite(raw: str) -> str | None:
+            if not raw or raw.startswith(("data:", "blob:", "#")):
+                return None
+            absolute = urljoin(page_url, raw)
+            if not _same_origin(absolute, self.base_host, self.base_scheme, self.base_port):
+                return None
+            return self._url_to_path.get(absolute)
+
+        html = replace_html_urls(html, rewrite)
+        return rewrite_same_origin_urls(html, page_url)
+
     def candidate_asset_urls(self, raw: str, page_url: str) -> set[str]:
         if raw.startswith(("http://", "https://")):
             return {raw} if _same_origin(raw, self.base_host, self.base_scheme, self.base_port) else set()
@@ -514,7 +585,11 @@ async def render_page(page, url: str, out_dir: Path, settle_ms: int, screenshots
         html = await page.content()
         if asset_capture is not None:
             await asset_capture.capture_html_references(html, url)
-        out_path.write_text(prepare_html(html, url, capture_assets), encoding="utf-8")
+        if asset_capture is not None:
+            html = asset_capture.prepare_html(html, url)
+        else:
+            html = prepare_html(html, url, capture_assets)
+        out_path.write_text(html, encoding="utf-8")
         if screenshots:
             try:
                 await page.screenshot(path=out_path.with_suffix(".png"), timeout=10000)
