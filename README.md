@@ -94,6 +94,9 @@ cd cloned-example
 python3 -m http.server 8080
 ```
 
+To compare a served clone against the live page with Playwright screenshots and
+DOM metrics, see [docs/PLAYWRIGHT_COMPARISON.md](docs/PLAYWRIGHT_COMPARISON.md).
+
 ---
 
 ## Optional: extract a design summary

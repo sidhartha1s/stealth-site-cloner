@@ -1,83 +1,109 @@
 ---
 name: clone-site
-description: Render the URLs listed in a site's sitemap.xml into local HTML files using headless Chromium, and optionally produce a CSS-derived design summary. Use this when the user asks to render, snapshot, mirror, or capture a local copy of a site they own or have permission to render. Common phrasings include "clone", "copy", "mirror", "snapshot", or "capture" a site.
+description: Clone any live website into working local HTML files AND extract its design system (colors, fonts, components, animations). Use this whenever the user says "clone", "copy", "mirror", "download", or "scrape" a website, or wants to replicate a site's look and feel. Defaults to flat homepage-only clone; full-site sitemap walk is opt-in. Always verify the clone visually before sharing a port URL with the user.
 ---
 
 # Clone Site
 
-Renders every URL of a sitemap to local HTML using `playwright-stealth`, plus optionally extracts a design summary via `skillui`.
+Clones a live website using playwright-stealth and extracts its design system via skillui. **Default = flat homepage only.** Sitemap walking is opt-in.
 
 ## Dependencies
 
-| Tool | Purpose |
-|---|---|
-| `stealth_clone.py` | Sitemap discovery + headless Chromium render |
-| `playwright` (pip) | Headless Chromium |
-| `playwright-stealth` (pip) | Robust headless rendering on sites that block default headless browsers |
-| `defusedxml` (pip) | Safe sitemap XML parsing |
-| `skillui` (npm, optional) | Design summary extraction |
-
-Setup: see the repo's `docs/INSTALL.md`. The path to `stealth_clone.py` depends on where the user cloned the repo.
+| Tool | Path | Purpose |
+|------|------|---------|
+| `flat_clone.py` | `~/flat_clone.py` | **Default.** Single-URL flat render → `<outdir>/index.html` |
+| `stealth_clone.py` | `~/stealth_clone.py` | Opt-in. Sitemap discovery + path-preserving render of every URL |
+| `verify_clone.py` | `~/verify_clone.py` | Headless screenshot + DOM heuristics — **mandatory before sharing a port** |
+| `playwright-stealth` | pip | Bot-detection bypass |
+| `playwright` | pip + npm global | Headless Chromium |
+| `skillui` | global npm | Design system extraction |
 
 ## Output structure
 
 ```
-./<output-dir>/
-  stealth-pages/   ← rendered HTML, URL directory structure preserved
-  design/          ← DESIGN.md + tokens (only if skillui ran)
+./cloned-<domain>/
+  index.html       ← flat homepage (default mode)
+  # OR (full-site mode):
+  stealth-pages/   ← every URL, path-preserved (our-story/index.html, tents/eden/index.html, ...)
+  design/          ← DESIGN.md + design tokens
 ```
 
-Pages in `stealth-pages/` link to the live CDN for CSS/JS — they render correctly in any browser when online.
+CSS/JS inside the cloned HTML still points at the live CDN — pages need **internet + an HTTP server** to render. `file://` breaks protocol-relative URLs (`//cdn.example.com/...`).
 
 ## Steps
 
-### 1. Render the sitemap
+### 1. Clone
+
+**Default — flat homepage only:**
 
 ```bash
-python stealth_clone.py <url> --out ./<output-dir>/stealth-pages/
+python3 ~/flat_clone.py <url> ./cloned-<domain>/
 ```
 
-Fetches `sitemap.xml`, discovers all URLs, renders each with a pool of 3 stealth browser pages. Output mirrors the URL structure.
+Saves a single `index.html` at the output root. No path nesting, no sitemap walking. Use this unless the user explicitly asks for "every page" or "full site".
 
-Falls back to rendering the single supplied URL if no sitemap is found.
-
-Useful flags:
-
-- `--limit N` — cap the number of pages, e.g. for a smoke test
-- The script accepts a single deep URL as the base — it will just render that one page
-
-### 2. Extract design summary (optional)
+**Opt-in — full-site sitemap walk** (only when user asks):
 
 ```bash
-skillui --url <url> --name <slug> --out ./<output-dir>/design/ --no-skill
+python3 ~/stealth_clone.py <url> --out ./cloned-<domain>/stealth-pages/
 ```
 
-`--no-skill` prevents auto-installing the design as a Claude skill. Default mode is reliable; `--mode ultra` tends to time out on JS-heavy sites.
+Fetches `sitemap.xml`, renders each URL with a pool of 3 stealth pages. Output mirrors URL structure. **Heads-up:** `stripe.com/in` saves to `in/index.html`, so serving `./cloned-stripe/` shows a directory listing — point the user at `http://localhost:PORT/in/` or use flat mode.
 
-If skillui can't find its modules on Linux:
+### 2. Serve
 
 ```bash
-NODE_PATH=$(npm root -g) skillui ...
+cd ./cloned-<domain>/ && python3 -m http.server <PORT>
 ```
 
-Clean up any auto-installed Claude skill afterwards:
+Run in background. Pages need HTTP serving, not `file://`.
+
+### 3. Verify before sharing — MANDATORY
+
+**Never share a port URL with the user before you have eyeballed the rendered output yourself.** The user will be furious. Run:
 
 ```bash
-# Linux / macOS
-rm -rf ~/.claude/skills/<slug>/
+python3 ~/verify_clone.py http://localhost:<PORT>/ /tmp/verify_<domain>.png
 ```
 
-For Codex, install this bundled skill by copying `skills/clone-site/` to `~/.codex/skills/clone-site/` on Linux/macOS or `%USERPROFILE%\.codex\skills\clone-site\` on Windows.
+Then `Read` the screenshot. Decide:
 
-### 3. Report
+- **Pass:** styled, recognizable, looks like the live site → share the port URL.
+- **Fail:** unstyled vertical list, raw text dump, directory listing, blank page, single giant element → kill the port, do not share. Tell the user what went wrong.
 
-- **Pages:** `./<output-dir>/stealth-pages/` — open any `index.html` in a browser
-- **Design:** `./<output-dir>/design/<slug>-design/DESIGN.md`
-- Page count and any failures
+Heuristic JSON output (cssLinks, docH, hasFlex, visibleTextLen) is a hint, not a gate. **Client-hydrated SPAs (Notion, many React apps) can pass every heuristic and still render as a broken DOM** — visual inspection is the only reliable check.
+
+### 4. Extract design system (optional, only when user asks for design)
+
+```bash
+NODE_PATH=$(npm root -g) skillui --url <url> --name <domain> \
+  --out ./cloned-<domain>/design/ --no-skill
+```
+
+`--no-skill` prevents auto-installing as a Claude skill. Default mode only — `--mode ultra` times out on JS-heavy sites.
+
+Clean up any auto-installed skill:
+```bash
+ls ~/.claude/skills/<domain>/ 2>/dev/null && \
+  rm ~/.claude/skills/<domain>/SKILL.md && rmdir ~/.claude/skills/<domain>/
+```
+
+### 5. Report
+
+- **Port URL** — only after verify step passes
+- **Local path** — `./cloned-<domain>/index.html` (or `stealth-pages/` for full-site)
+- **Design** — `./cloned-<domain>/design/DESIGN.md` if extracted
+- **Known failures** — name any pages that failed to render
+
+## Known failure modes
+
+- **Client-side hydration nukes the DOM** (Notion-style React apps) — server-rendered HTML is replaced on load with a broken tree. No fix in this skill. Tell the user; suggest they pick a less hydration-heavy target.
+- **Protocol-relative URLs under `file://`** — always serve over HTTP.
+- **Directory listing on full-site clones** — sitemap mode saves `stripe.com/in` to `in/index.html`. Serve from the right subpath or use flat mode.
+- **Bot detection** — `stealth_clone.py` auto-drops concurrency from 3 to 1 if challenges trigger. If still blocked, flat mode + manual User-Agent already in `flat_clone.py` usually works.
 
 ## Notes
 
-- Saved pages require an internet connection (CSS/JS load from the live origin).
-- `CONCURRENCY` is hardcoded to 3 in `stealth_clone.py` — edit the constant if a host throttles.
-- Single-URL renders (no sitemap) work via graceful fallback.
-- Use only on URLs the user owns, operates, or has permission to render.
+- Pages require an internet connection (CSS/JS load from the live CDN).
+- Flat mode is the default because users almost always mean "show me the homepage", not "walk 200 URLs".
+- Never share an unverified port URL. The user has called this out explicitly. Verify, then share.
