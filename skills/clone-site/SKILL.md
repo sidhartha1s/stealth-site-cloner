@@ -35,11 +35,16 @@ python3 pipeline/verify/t1_parity.py <bundle-dir> <live-url>         # skeleton 
 python3 pipeline/verify/t3_visual.py <bundle-dir> <clone-url> <live-url>  # pixel parity
 
 # 4. ship bundle (AWS-ready flat layout + .htaccess + spec files) + security gate
+#    — runs ONLY on the user's yes; see the ask-before-bundle rule below
 python3 pipeline/bundle.py runs/<site> <live-url> runs/<site>-bundle
-pipeline/verify/seccheck.sh runs/<site>-bundle bookings.<domain> [allowlist]
+pipeline/verify/seccheck.sh runs/<site>-bundle bookings.<domain>[,<domain2>] [allowlist]
 ```
 
 Rules that survive from this skill:
+- **Ask before bundling (standing preference, 2026-07-03): when the clone is done and
+  verified, ask the user "Bundle for AWS upload?" — do NOT run bundle.py unprompted.**
+  Cloning and shipping are separate decisions; the bundle step also needs their
+  booking-domain list and allowlist sign-offs.
 - **Never share a port URL before eyeballing the rendered output yourself.**
 - Pages need internet + HTTP serving (CSS/JS load from the live CDN; `file://` breaks).
 - REBUILD verdicts from the SPA detector are ADVISORY — check hydration parity
