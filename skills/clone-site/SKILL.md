@@ -18,27 +18,23 @@ HTML** instead, which the site's own CDN JS hydrates fresh, exactly like the liv
 It also captures the mobile template (Simplotel CMS serves different markup per UA) and
 serves it UA-adaptively.
 
-## Current flow
+## Current flow — one command
 
 ```bash
 cd ~/Automation\ Projects/site-migrator
 
-# 1. capture (homepage; add --sitemap for the full site)
-python3 pipeline/capture.py <url> runs/<site> [--sitemap]
+# capture -> serve -> T2 (clone+live) -> T1 -> T3 -> run-report.json,
+# then STOPS and asks "Bundle for AWS upload?"
+python3 pipeline/migrate.py <url> [--homepage] [--quick]
 
-# 2. preview — capture dirs are ARCHIVES; never browse via file://
-python3 pipeline/ua_server.py runs/<site> <port>   # then http://localhost:<port>/
-
-# 3. verify (eyeball a screenshot first, then the tiers)
-python3 pipeline/verify/t2_functional.py http://localhost:<port>/    # widgets work?
-python3 pipeline/verify/t1_parity.py <bundle-dir> <live-url>         # skeleton parity
-python3 pipeline/verify/t3_visual.py <bundle-dir> <clone-url> <live-url>  # pixel parity
-
-# 4. ship bundle (AWS-ready flat layout + .htaccess + spec files) + security gate
-#    — runs ONLY on the user's yes; see the ask-before-bundle rule below
-python3 pipeline/bundle.py runs/<site> <live-url> runs/<site>-bundle
-pipeline/verify/seccheck.sh runs/<site>-bundle bookings.<domain>[,<domain2>] [allowlist]
+# on the user's yes, re-run extended through ship bundle + seccheck:
+python3 pipeline/migrate.py <url> --bundle bookings.<domain>[,<domain2>]
 ```
+
+Read `runs/<site>/run-report.json` after the run; eyeball whatever it flags
+(REBUILD advisories, T3 over-threshold folds, seccheck holds). Individual
+stages remain runnable solo — see the repo README for the per-stage commands
+(capture.py / ua_server.py / verify/* / bundle.py).
 
 Rules that survive from this skill:
 - **Ask before bundling (standing preference, 2026-07-03): when the clone is done and
