@@ -1,92 +1,31 @@
 # stealth-site-cloner
 
-A single-file Python script that renders the URLs listed in a `sitemap.xml` using a headless Chromium browser and writes the rendered HTML into a local directory tree.
+A single-file Python script that renders every URL in a site's `sitemap.xml` with a headless Chromium browser and writes the rendered HTML into a local directory tree.
 
-CSS, JavaScript, and other assets in the saved HTML continue to load from their original origin. For complex SPA/WebGL pages, use `--settle-ms` and `--screenshots` to capture a visual migration reference.
+> **Use responsibly.** Run this only against URLs you own, operate, or have explicit permission to render. You are responsible for compliance with the destination's terms of service and applicable law.
 
-Cross-platform: **Linux, macOS, and native Windows** (no WSL needed).
+## What it does
 
-> **Use responsibly.** Run this only against URLs you own, URLs you operate, or URLs whose owners have given you explicit permission to render. You are responsible for compliance with the destination's terms of service and applicable law.
+- `stealth_clone.py`: walks `sitemap.xml`, renders each URL with Playwright (+ `playwright-stealth`), and saves the rendered HTML to `./out/<path>/index.html`. CSS, JS, and other assets keep loading from their original origin. Falls back to rendering the single URL you passed if the host has no sitemap.
+- For complex SPA/WebGL pages, `--settle-ms` and `--screenshots` capture a visual migration reference, and `--capture-assets` saves same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay.
+- `flat_clone.py` / `verify_clone.py`: helper scripts for a flat homepage clone and clone verification (see `docs/`).
+- `scripts/audit_local_clones.py` / `scripts/compare_live_local.py`: audit previously generated `cloned-*` output, and compare a served clone against the live page with Playwright screenshots and DOM metrics.
+- Cross-platform: Linux, macOS, and native Windows, no WSL needed.
 
----
-
-## What you get
-
-```
-./out/
-├── index.html
-├── about/index.html
-├── contact/index.html
-└── blog/post-1/index.html
-```
-
-Open any `index.html` in a browser.
-
----
-
-## Requirements
-
-| | Min version | Notes |
-|---|---|---|
-| Python | 3.10 | Comes with most Linux distros; use the python.org installer on Windows |
-| pip | bundled | |
-| Disk | ~200 MB | For the bundled Chromium that Playwright downloads |
-| Internet | required | For the install, and for rendering pages live |
-
-Optional — only for the design-summary extractor:
-
-| | Min version |
-|---|---|
-| Node.js | 18 |
-| npm | bundled |
-
-The script does **not** require a system-level browser, sudo on Windows, Docker, or WSL.
-
----
-
-## Install
-
-### Linux / macOS
+## Quick start
 
 ```bash
 git clone https://github.com/sidhartha1s/stealth-site-cloner.git
 cd stealth-site-cloner
-bash scripts/install.sh
-```
+bash scripts/install.sh          # Linux/macOS
+# powershell -ExecutionPolicy Bypass -File scripts\install.ps1   # Windows
 
-### Windows 10 / 11 (native)
-
-```powershell
-git clone https://github.com/sidhartha1s/stealth-site-cloner.git
-cd stealth-site-cloner
-powershell -ExecutionPolicy Bypass -File scripts\install.ps1
-```
-
-Step-by-step instructions per OS, with a Windows troubleshooting table, are in [docs/INSTALL.md](docs/INSTALL.md).
-
----
-
-## Usage
-
-```bash
 python stealth_clone.py https://example.com/ --out ./out/
 ```
 
-| Argument | Default | Description |
-|---|---|---|
-| `url` (positional) | required | Base URL to render |
-| `--out` | `./stealth-clone` | Output directory |
-| `--limit N` | `0` (all) | Cap the number of URLs to render |
-| `--single-page` | off | Skip sitemap discovery and render only the supplied URL |
-| `--settle-ms N` | `2000` | Wait time after `DOMContentLoaded` before saving |
-| `--screenshots` | off | Also save a viewport PNG next to each HTML file |
-| `--capture-assets` | off | Save same-origin JS, workers, WASM, images, fonts, and runtime assets for local HTTP replay |
+Key flags: `--limit N` (cap URLs rendered), `--single-page` (skip sitemap discovery), `--settle-ms N` (default 2000, wait after `DOMContentLoaded`), `--screenshots`, `--capture-assets`. Full flag table and examples in `docs/USAGE.md`.
 
-If the host has no `sitemap.xml`, the script falls back to rendering the single URL you passed.
-
-More examples and internals: [docs/USAGE.md](docs/USAGE.md).
-
-For WebGL/SPA sites, serve captured output over HTTP instead of opening files directly:
+For WebGL/SPA output, serve it instead of opening the file directly:
 
 ```bash
 python stealth_clone.py https://example.com/ --out ./cloned-example/ --single-page --settle-ms 30000 --screenshots --capture-assets
@@ -94,81 +33,32 @@ cd cloned-example
 python3 -m http.server 8080
 ```
 
-To compare a served clone against the live page with Playwright screenshots and
-DOM metrics, see [docs/PLAYWRIGHT_COMPARISON.md](docs/PLAYWRIGHT_COMPARISON.md).
-To audit previously generated `cloned-*` outputs locally, see
-[docs/LOCAL_CLONE_AUDIT.md](docs/LOCAL_CLONE_AUDIT.md).
+## Layout
 
----
+| Path | Role |
+|---|---|
+| `stealth_clone.py` | The renderer: sitemap walk, single-file, ~135 lines |
+| `flat_clone.py` | Flat homepage clone helper |
+| `verify_clone.py` | Clone verification helper |
+| `scripts/install.sh`, `scripts/install.ps1` | Per-OS installers |
+| `scripts/audit_local_clones.py` | Audits previously generated `cloned-*` output |
+| `scripts/compare_live_local.py` | Compares a served clone against the live page |
+| `docs/INSTALL.md` | Per-OS install steps, Windows troubleshooting table |
+| `docs/USAGE.md` | CLI flags, examples, internals |
+| `docs/DESIGN_EXTRACTION.md` | Optional `skillui` design-summary add-on |
+| `docs/PLAYWRIGHT_COMPARISON.md`, `docs/LOCAL_CLONE_AUDIT.md` | Comparison and audit walkthroughs |
+| `skills/clone-site/SKILL.md` | Drop-in agent skill for Claude Code or Codex |
 
-## Optional: extract a design summary
+## Notes / gotchas
 
-[skillui](https://www.npmjs.com/package/skillui) is a separate npm tool that produces a `DESIGN.md` summarising colours, fonts, components, and animations derived from a site's CSS.
+- Requires Python 3.10+ and Playwright's bundled Chromium (~200 MB disk, downloaded on install). Node.js 18+ only needed for the optional `skillui` design extractor (`npm install -g skillui`).
+- No system-level browser, sudo on Windows, Docker, or WSL required.
+- The renderer writes only inside the `--out` directory; sitemap entries attempting path traversal (including URL-encoded and Windows-separator variants) are dropped with a defence-in-depth check before each write.
+- Sitemap XML is parsed with `defusedxml`, which disables external entities.
+- Saved HTML includes a small replay shim so root-relative SPA/WebGL asset requests still resolve to the original host when opened from `file://`.
+- Does not bypass paywalls, login walls, or DRM, and does not consult `robots.txt`; don't render at high concurrency against hosts you don't own.
+- MIT licensed (`LICENSE` present in the repo).
 
-```bash
-npm install -g skillui
-skillui --url https://example.com/ --name example --out ./design/ --no-skill
-```
+## Related repos
 
-Details: [docs/DESIGN_EXTRACTION.md](docs/DESIGN_EXTRACTION.md).
-
----
-
-## Use with Claude Code or Codex
-
-A ready-made [agent skill](skills/clone-site/SKILL.md) lives in `skills/clone-site/`.
-
-For Codex, copy it to:
-
-- Linux/macOS: `~/.codex/skills/clone-site/`
-- Windows: `%USERPROFILE%\.codex\skills\clone-site\`
-
-For Claude Code, copy it to:
-
-- Linux/macOS: `~/.claude/skills/clone-site/`
-- Windows: `%USERPROFILE%\.claude\skills\clone-site\`
-
----
-
-## Repository layout
-
-```
-stealth-site-cloner/
-├── README.md
-├── LICENSE                       MIT
-├── stealth_clone.py              the renderer (single-file, ~135 lines)
-├── requirements.txt              Python dependencies
-├── .gitignore
-├── docs/
-│   ├── INSTALL.md                per-OS install with troubleshooting
-│   ├── USAGE.md                  CLI flags, examples, internals
-│   └── DESIGN_EXTRACTION.md      optional skillui add-on
-├── scripts/
-│   ├── install.sh                Linux / macOS one-shot installer
-│   └── install.ps1               Windows PowerShell installer
-└── skills/
-    └── clone-site/
-        └── SKILL.md              drop-in skill for Codex or Claude Code
-```
-
----
-
-## Security & responsible use
-
-- The renderer writes only inside the directory passed via `--out`. Sitemap entries that try to escape this directory (including URL-encoded traversal and Windows path separators) are dropped, with a defence-in-depth check before each write.
-- Sitemap XML is parsed with `defusedxml`, which disables external entities and blocks common XML attacks.
-- Saved HTML includes a small replay shim so root-relative SPA and WebGL asset requests still resolve to the original host when opened from `file://`.
-- The tool does not bypass paywalls, login walls, or DRM. Pages requiring a session will not render.
-- The tool does not consult `robots.txt`. **Respect site owners.** Don't render at high concurrency against hosts you don't own.
-
----
-
-## Disclaimer
-
-This is a general-purpose page-rendering tool. Render only what you have the right to render. The maintainers accept no responsibility for misuse.
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+[site-migrator](https://github.com/sidhartha1s/site-migrator) states in its own README that it supersedes the `clone-site` skill family, naming `stealth_clone.py` specifically: its `capture.py --sitemap` replaces this repo's sitemap walk and adds crash-safe resume. Nothing in this repo says so, so treat site-migrator as the newer pipeline and this one as kept for the lighter single-file rendering case.
